@@ -1,8 +1,8 @@
 class ShoppingList {
     constructor() {
         this.items = [];
-        this.supabaseUrl = 'https://VOTRE_URL_SUPABASE.supabase.co';
-        this.supabaseKey = 'VOTRE_CLE_SUPABASE';
+        this.supabaseUrl = 'https://bxxfzrvhicpryjbrajty.supabase.co';
+        this.supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ4eGZ6cnZoaWNwcnlqYnJhanR5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg0NDU5ODYsImV4cCI6MjA3NDAyMTk4Nn0.b9LO74FMypb3wfyhWnxNtEKBN-ktjyJ26L-gWwisMxM';
         this.init();
     }
 
