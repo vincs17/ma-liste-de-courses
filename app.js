@@ -1,111 +1,111 @@
 class ShoppingList {
     constructor() {
         this.items = [];
-        this.githubToken = 'À_MODIFIER_APRÈS'; // NE PAS MODIFIER MAINTENANT
-        this.repoOwner = 'À_MODIFIER_APRÈS';   // NE PAS MODIFIER MAINTENANT
-        this.repoName = 'ma-liste-de-courses';
-        this.dataFile = 'shopping-data.json';
+        this.supabaseUrl = 'https://VOTRE_URL_SUPABASE.supabase.co';
+        this.supabaseKey = 'VOTRE_CLE_SUPABASE';
         this.init();
     }
 
     async init() {
+        // Initialiser Supabase
+        this.supabase = window.supabase.createClient(this.supabaseUrl, this.supabaseKey);
+        
         await this.loadItems();
         this.renderItems();
         this.setupEventListeners();
-        this.startSync();
+        this.setupRealtime();
     }
 
     async loadItems() {
         try {
-            const response = await fetch(
-                `https://api.github.com/repos/${this.repoOwner}/${this.repoName}/contents/${this.dataFile}`,
-                {
-                    headers: {
-                        'Authorization': `token ${this.githubToken}`,
-                        'Accept': 'application/vnd.github.v3+json'
-                    }
-                }
-            );
+            const { data, error } = await this.supabase
+                .from('shopping_items')
+                .select('*')
+                .order('created_at', { ascending: true });
 
-            if (response.ok) {
-                const data = await response.json();
-                const content = atob(data.content);
-                this.items = JSON.parse(content);
-                this.removeDuplicates();
-            }
+            if (error) throw error;
+            
+            this.items = data || [];
+            this.removeDuplicates();
         } catch (error) {
-            console.log('Chargement des données initial...');
+            console.error('Erreur chargement:', error);
+            // Charger depuis le cache local
+            const saved = localStorage.getItem('shoppingList');
+            if (saved) this.items = JSON.parse(saved);
         }
     }
 
-    async saveItems() {
-        const content = btoa(JSON.stringify(this.items, null, 2));
-        
-        try {
-            let sha = null;
-            try {
-                const existingFile = await fetch(
-                    `https://api.github.com/repos/${this.repoOwner}/${this.repoName}/contents/${this.dataFile}`,
-                    {
-                        headers: {
-                            'Authorization': `token ${this.githubToken}`,
-                            'Accept': 'application/vnd.github.v3+json'
-                        }
-                    }
-                );
-                
-                if (existingFile.ok) {
-                    const data = await existingFile.json();
-                    sha = data.sha;
-                }
-            } catch (e) {}
-
-            const response = await fetch(
-                `https://api.github.com/repos/${this.repoOwner}/${this.repoName}/contents/${this.dataFile}`,
-                {
-                    method: 'PUT',
-                    headers: {
-                        'Authorization': `token ${this.githubToken}`,
-                        'Accept': 'application/vnd.github.v3+json',
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        message: 'Mise à jour de la liste',
-                        content: content,
-                        sha: sha
-                    })
-                }
-            );
-
-            if (!response.ok) {
-                throw new Error('Erreur sauvegarde GitHub');
-            }
-        } catch (error) {
-            console.error('Erreur:', error);
-            localStorage.setItem('shoppingList', JSON.stringify(this.items));
-        }
-    }
-
-    addItem(name) {
+    async addItem(name) {
         const trimmedName = name.trim();
         if (!trimmedName) return;
 
-        const newItem = {
-            id: Date.now().toString(),
-            name: trimmedName,
-            timestamp: new Date().toISOString()
-        };
+        // Vérifier si existe déjà
+        const exists = this.items.some(item => 
+            item.name.toLowerCase() === trimmedName.toLowerCase()
+        );
+        if (exists) return;
 
-        this.items.push(newItem);
-        this.removeDuplicates();
-        this.saveItems();
-        this.renderItems();
+        try {
+            const { data, error } = await this.supabase
+                .from('shopping_items')
+                .insert([{ 
+                    name: trimmedName,
+                    created_at: new Date().toISOString()
+                }])
+                .select();
+
+            if (error) throw error;
+
+            this.items.push(data[0]);
+            this.saveToLocalStorage();
+            this.renderItems();
+        } catch (error) {
+            console.error('Erreur ajout:', error);
+            // Sauvegarde locale en fallback
+            const newItem = {
+                id: Date.now().toString(),
+                name: trimmedName,
+                created_at: new Date().toISOString()
+            };
+            this.items.push(newItem);
+            this.saveToLocalStorage();
+            this.renderItems();
+        }
     }
 
-    deleteItem(id) {
-        this.items = this.items.filter(item => item.id !== id);
-        this.saveItems();
-        this.renderItems();
+    async deleteItem(id) {
+        try {
+            const { error } = await this.supabase
+                .from('shopping_items')
+                .delete()
+                .eq('id', id);
+
+            if (error) throw error;
+
+            this.items = this.items.filter(item => item.id !== id);
+            this.saveToLocalStorage();
+            this.renderItems();
+        } catch (error) {
+            console.error('Erreur suppression:', error);
+            // Suppression locale en fallback
+            this.items = this.items.filter(item => item.id !== id);
+            this.saveToLocalStorage();
+            this.renderItems();
+        }
+    }
+
+    setupRealtime() {
+        // Écouter les changements en temps réel
+        this.supabase
+            .channel('shopping-list-changes')
+            .on('postgres_changes', 
+                { event: '*', schema: 'public', table: 'shopping_items' }, 
+                async () => {
+                    await this.loadItems();
+                    this.renderItems();
+                }
+            )
+            .subscribe();
     }
 
     removeDuplicates() {
@@ -113,11 +113,16 @@ class ShoppingList {
         this.items = this.items.filter(item => {
             const lowerName = item.name.toLowerCase();
             if (seen.has(lowerName)) {
+                this.deleteItem(item.id); // Supprimer le doublon
                 return false;
             }
             seen.add(lowerName);
             return true;
         });
+    }
+
+    saveToLocalStorage() {
+        localStorage.setItem('shoppingList', JSON.stringify(this.items));
     }
 
     renderItems() {
@@ -162,22 +167,10 @@ class ShoppingList {
             input.value = '';
         });
     }
-
-    startSync() {
-        setInterval(async () => {
-            await this.loadItems();
-            this.renderItems();
-        }, 30000);
-    }
 }
 
+// Initialisation
 const shoppingList = new ShoppingList();
-
-if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js')
-        .then(() => console.log('Service Worker enregistré'))
-        .catch(err => console.log('Erreur Service Worker:', err));
-}
 
 function addItem() {
     const input = document.getElementById('newItem');
